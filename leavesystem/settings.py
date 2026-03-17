@@ -46,7 +46,6 @@ INSTALLED_APPS = [
     # Local apps
     "leaves",
     "leavesystem",
-    "users",
 ]
 
 MIDDLEWARE = [
