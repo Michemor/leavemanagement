@@ -28,34 +28,37 @@ def custom_exception_handler(exc, context):
 
         # Format validation errors
         if response.status_code == http_status.HTTP_400_BAD_REQUEST:
-            # If it's a validation error, combine all error messages
-            error_message = "Validation error"
+            # Build a human-readable summary and keep per-field errors for the frontend
+            errors = {}
+            error_details = []
 
             if isinstance(response.data, dict):
-                # Build error message from validation errors
-                error_details = []
-                for field, errors in response.data.items():
-                    if isinstance(errors, list):
-                        for error in errors:
+                for field, field_errors in response.data.items():
+                    if isinstance(field_errors, list):
+                        errors[field] = [str(e) for e in field_errors]
+                        for error in field_errors:
                             error_details.append(f"{field}: {str(error)}")
                     else:
-                        error_details.append(f"{field}: {str(errors)}")
-
-                if error_details:
-                    error_message = " | ".join(error_details)
+                        errors[field] = str(field_errors)
+                        error_details.append(f"{field}: {str(field_errors)}")
             elif isinstance(response.data, list):
-                error_message = " | ".join([str(e) for e in response.data])
+                error_details = [str(e) for e in response.data]
+                errors = {"non_field_errors": error_details}
             else:
-                error_message = str(response.data)
+                error_details = [str(response.data)]
+                errors = {"detail": str(response.data)}
 
-            # Return standardized error format
+            error_message = " | ".join(error_details) if error_details else "Validation error"
+
             return Response(
                 {
                     "status": 0,
                     "message": error_message,
+                    "errors": errors,
                 },
                 status=response.status_code,
             )
+
 
         # Handle authentication errors
         elif response.status_code == http_status.HTTP_401_UNAUTHORIZED:
