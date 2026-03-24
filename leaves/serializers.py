@@ -9,7 +9,23 @@ from .models import Leave, Employee
 logger = logging.getLogger(__name__)
 
 
+class EmployeeNestedSerializer(serializers.ModelSerializer):
+    """Nested serializer for employee data in leave responses."""
+
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Employee
+        fields = ["id", "email", "full_name", "employee_role", "employee_department"]
+
+    def get_full_name(self, obj):
+        """Return the full name of the employee."""
+        return f"{obj.first_name} {obj.last_name}".strip()
+
+
 class LeaveSerializer(serializers.ModelSerializer):
+    employee = EmployeeNestedSerializer(read_only=True)
+
     class Meta:
         model = Leave
         fields = "__all__"
@@ -22,26 +38,33 @@ class LeaveSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         """Custom validation to ensure that the end date is not before the start date and that the start date is not in the past."""
+        # Only validate dates if they are present in the data (allows partial PATCH updates)
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+        leave_type = data.get("leave_type")
+
         logger.debug(
             "Validating leave for %(employee)s: %(start)s -> %(end)s (%(type)s)",
             {
                 "employee": getattr(data.get("employee"), "id", None),
-                "start": data.get("start_date"),
-                "end": data.get("end_date"),
-                "type": data.get("leave_type"),
+                "start": start_date,
+                "end": end_date,
+                "type": leave_type,
             },
         )
 
-        if data["end_date"] < data["start_date"]:
+        # Only compare dates if both are present
+        if start_date and end_date and end_date < start_date:
             raise serializers.ValidationError("End date cannot be before start date.")
-        if data["start_date"] < date.today():
+
+        # Only check if start date is in the past if start_date is provided
+        if start_date and start_date < date.today():
             raise serializers.ValidationError("Start date cannot be in the past.")
 
-        leave_type = data.get("leave_type")
         document = data.get("supporting_document")
-
         leaves_requiring_document = ["SICK", "STUDY"]
 
+        # Only validate document requirement if leave_type is provided
         if leave_type in leaves_requiring_document and not document:
             raise serializers.ValidationError(
                 f"{leave_type} leave requires a supporting document."
@@ -49,10 +72,16 @@ class LeaveSerializer(serializers.ModelSerializer):
         logger.info(
             "Leave validation successful for type=%s start=%s end=%s",
             leave_type,
-            data.get("start_date"),
-            data.get("end_date"),
+            start_date,
+            end_date,
         )
         return data
+
+    def validate_status(self, value):
+        """Normalize status to uppercase to handle case-insensitive input."""
+        if value:
+            value = value.upper()
+        return value
 
 
 class RegistrationSerializer(serializers.ModelSerializer):
@@ -116,3 +145,71 @@ class UpdatePasswordSerializer(serializers.Serializer):
     new_password = serializers.CharField(
         write_only=True, required=True, style={"input_type": "password"}, min_length=8
     )
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """Serializer used to request a password reset email."""
+
+    email = serializers.EmailField()
+    redirect_url = serializers.URLField(
+        required=False,
+        help_text="The URL of the frontend page where the user will reset their password. e.g., http://localhost:3000/reset-password",
+    )
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Serializer used to confirm a password reset with a token."""
+
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(
+        write_only=True, required=True, style={"input_type": "password"}, min_length=8
+    )
+
+
+class EmployeeLoginSerializer(serializers.ModelSerializer):
+    """Serializer to return employee user data during login."""
+
+    class Meta:
+        model = Employee
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "employee_department",
+            "employee_position",
+            "phone_number",
+            "employee_role",
+        ]
+
+
+class CustomTokenObtainPairSerializer(serializers.Serializer):
+    """Custom serializer for token response with user data included."""
+
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+    user = EmployeeLoginSerializer()
+
+    @classmethod
+    def get_token(cls, user):
+        """Generate tokens and include user data in response."""
+        from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+        token_serializer = TokenObtainPairSerializer()
+        token_serializer.fields["email"] = serializers.EmailField()
+        token_serializer.fields["password"] = serializers.CharField()
+
+        return token_serializer
+
+
+class LeaveStatisticsSerializer(serializers.Serializer):
+    """Serializer for leave statistics."""
+
+    total_leaves = serializers.IntegerField()
+    pending_leaves = serializers.IntegerField()
+    approved_leaves = serializers.IntegerField()
+    rejected_leaves = serializers.IntegerField()
+    average_duration = serializers.FloatField()
+    leave_types_breakdown = serializers.DictField()
+    status_breakdown = serializers.DictField()

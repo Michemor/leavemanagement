@@ -17,8 +17,7 @@ class Leave(models.Model):
     STATUS_CHOICES = [
         ("PENDING", "Pending"),
         ("APPROVED", "Approved"),
-        ("REJECTED", "Rejected"),
-        ("CANCELLED", "Cancelled"),
+        ("REJECTED", "Rejected")
     ]
     """Model representing a leave request in the leave management system.
     Each leave request has a unique ID, name, type, start and end dates, reason for the leave, and an optional supporting document."""
@@ -34,6 +33,9 @@ class Leave(models.Model):
     employee = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="leaves"
     )
+
+    class Meta:
+        ordering = ["-id"]
 
     def clean(self):
         """Custom validation to ensure that the end date is not before the start date and that the start date is not in the past."""
