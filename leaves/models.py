@@ -4,25 +4,21 @@ from django.core.exceptions import ValidationError
 from datetime import date
 from django.conf import settings
 from django.contrib.auth.base_user import BaseUserManager
-
+from uuid import uuid4
 
 class Institution(models.Model):
     """Model representing an institution in the leave management system.
-    Each institution has a unique name and can have multiple employees associated with it."""
-
+    Each institution has a unique name and can have multiple employees associated with it.
+    """
     name = models.CharField(max_length=255, unique=True)
-    location = models.CharField(max_length=255, blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return self.name
-    
+
     class Meta:
         verbose_name = "Institution"
         verbose_name_plural = "Institutions"
         ordering = ["name"]
-
 
 
 class EmailUserManager(BaseUserManager):
@@ -51,7 +47,6 @@ class EmailUserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
 
-
 class Employee(AbstractUser):
     """Model representing an employee in the leave management system.
     Each employee is associated with a Django User for authentication and has additional fields for department, position, email, and phone number.
@@ -66,9 +61,11 @@ class Employee(AbstractUser):
         STAFF = "STAFF", "Staff"
         MANAGER = "MANAGER", "Manager"
         HR = "HR", "HR"
+        ADMIN = "ADMIN", "Admin"
 
-    username = None 
-    
+    username = None
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     first_name = models.CharField(max_length=30, blank=True, null=True)
     last_name = models.CharField(max_length=30, blank=True, null=True)
     email = models.EmailField(unique=True)
@@ -76,18 +73,34 @@ class Employee(AbstractUser):
     department = models.CharField(max_length=100, blank=True, null=True)
     position = models.CharField(max_length=100, blank=True, null=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.STAFF)
-    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name="employees", default=None, blank=True, null=True)
+    institution = models.ForeignKey(
+        Institution,
+        on_delete=models.CASCADE,
+        related_name="employees",
+        default=None,
+        blank=True,
+        null=True,
+    )
     must_reset_password = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 
     objects = EmailUserManager()
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ['first_name', 'last_name', 'department', 'position', 'institution', 'role']
+    REQUIRED_FIELDS = [
+        "first_name",
+        "last_name",
+        "department",
+        "position",
+        "institution",
+        "role",
+    ]
 
     def __str__(self):
-        return f"{self.first_name} {self.last_name} ({self.department} - {self.position})"
-    
+        return (
+            f"{self.first_name} {self.last_name} ({self.department} - {self.position})"
+        )
+
     def save(self, *args, **kwargs):
         """
         Automatically set is_staff based on role.
@@ -97,35 +110,46 @@ class Employee(AbstractUser):
             self.is_staff = True
         else:
             self.is_staff = False
-        
+
         super().save(*args, **kwargs)
+
 
 class LeaveType(models.Model):
     """Model representing a leave type in the leave management system.
-    Each leave type has a unique ID, name, type, start and end dates, reason for the leave, and an optional supporting document."""
-    name = models.CharField(max_length=100, unique=True, help_text="e.g Annual Leave, Sick Leave, Family Responsibility Leave, Study Leave")
-    max_days = models.PositiveIntegerField(help_text="Maximum number of days allowed for this leave type")
+    Each leave type has a unique ID, name, type, start and end dates, reason for the leave, and an optional supporting document.
+    """
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="e.g Annual Leave, Sick Leave, Family Responsibility Leave, Study Leave",
+    )
+    max_days = models.PositiveIntegerField(
+        help_text="Maximum number of days allowed for this leave type"
+    )
     is_active = models.BooleanField(default=True)
-    
+
     class Meta:
         verbose_name = "Leave Type"
         verbose_name_plural = "Leave Types"
 
     def __str__(self):
         return f"{self.name} - {self.max_days} days"
-    
 
 
 class Leave(models.Model):
     """Model representing a leave request in the leave management system.
-    Each leave request has a unique ID, name, type, start and end dates, reason for the leave, and an optional supporting document."""
+    Each leave request has a unique ID, name, type, start and end dates, reason for the leave, and an optional supporting document.
+    """
 
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
         REJECTED = "REJECTED", "Rejected"
 
-    employee = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="leaves")
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    employee = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="leaves"
+    )
     leave_type = models.ForeignKey(
         LeaveType, on_delete=models.PROTECT, related_name="leaves"
     )
@@ -139,7 +163,6 @@ class Leave(models.Model):
         max_length=20, choices=Status.choices, default=Status.PENDING
     )
     admin_remarks = models.TextField(blank=True, null=True)
-
 
     class Meta:
         ordering = ["-id"]
@@ -167,4 +190,3 @@ class Leave(models.Model):
             getattr(self.employee, "get_full_name", lambda: "")() or self.employee.email
         )
         return f"{employee_display} - {self.leave_type} from {self.start_date} to {self.end_date}"
-

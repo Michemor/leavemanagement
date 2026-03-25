@@ -21,16 +21,17 @@ from .serializers import (
 from .utils import calculate_working_days, send_welcome_email, send_password_reset_email
 import logging
 from .permissions import (
-    IsAdminRole, 
+    IsAdminRole,
     IsAdminOrHR,
-    IsAdminOrHROfSameInstitutionAndDepartment
+    IsAdminOrHROfSameInstitutionAndDepartment,
 )
 
 logger = logging.getLogger(__name__)
 
-#=============================
+# =============================
 # AUTH VIEWS
-#=============================
+# =============================
+
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
@@ -40,20 +41,24 @@ class LoginView(APIView):
         serializer.is_valid(raise_exception=True)
 
         employee = authenticate(
-            email=serializer.validated_data["email"], 
-            password=serializer.validated_data["password"]
+            email=serializer.validated_data["email"],
+            password=serializer.validated_data["password"],
         )
 
         if not employee:
             return Response(
-                {"message": "Invalid email or password."}, 
-                status=status.HTTP_401_UNAUTHORIZED)
+                {"message": "Invalid email or password."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
         if not employee.is_active:
             return Response(
-                {"message": "Your account is inactive. Please contact your administrator."}, 
-                status=status.HTTP_403_FORBIDDEN)
-        
+                {
+                    "message": "Your account is inactive. Please contact your administrator."
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         refresh = RefreshToken.for_user(employee)
         logger.info(f"Employee {employee.email} logged in successfully.")
 
@@ -66,67 +71,78 @@ class LoginView(APIView):
             }
         )
 
+
 class SetPassword(APIView):
     """
     Called when employee clicks the reset link in their email.
     Validates uid and token, then sets the new password.
     """
+
     permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = SetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
         employee = serializer.save()
         logger.info(f"Employee {employee.email} has reset their password successfully.")
-        
+
         return Response(
-            {"message": "Password has been reset successfully."}, 
-            status=status.HTTP_200_OK
+            {"message": "Password has been reset successfully."},
+            status=status.HTTP_200_OK,
         )
+
 
 class PasswordResetRequestView(APIView):
     """
     Request a password reset. Sends an email with a reset link to the user.
     """
+
     permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
-        
+
         try:
             employee = Employee.objects.get(email=email)
         except Employee.DoesNotExist:
             # Don't reveal if email exists or not (security best practice)
             return Response(
-                {"message": "If an account exists with this email, you will receive a password reset link."}, 
-                status=status.HTTP_200_OK
+                {
+                    "message": "If an account exists with this email, you will receive a password reset link."
+                },
+                status=status.HTTP_200_OK,
             )
-        
+
         if not employee.is_active:
             return Response(
-                {"message": "If an account exists with this email, you will receive a password reset link."}, 
-                status=status.HTTP_200_OK
+                {
+                    "message": "If an account exists with this email, you will receive a password reset link."
+                },
+                status=status.HTTP_200_OK,
             )
-        
+
         # Generate reset token
         from django.contrib.auth.tokens import default_token_generator
         from django.utils.http import urlsafe_base64_encode
         from django.utils.encoding import force_bytes
-        
+
         uid = urlsafe_base64_encode(force_bytes(employee.pk))
         token = default_token_generator.make_token(employee)
-        
+
         # Send password reset email
         reset_link = f"{request.META.get('HTTP_ORIGIN', 'http://localhost:3000')}/reset-password/{uid}/{token}"
         send_password_reset_email(employee, reset_link)
-        
+
         logger.info(f"Password reset email sent to {employee.email}")
-        
+
         return Response(
-            {"message": "If an account exists with this email, you will receive a password reset link."}, 
-            status=status.HTTP_200_OK
+            {
+                "message": "If an account exists with this email, you will receive a password reset link."
+            },
+            status=status.HTTP_200_OK,
         )
+
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -138,45 +154,66 @@ class LogoutView(APIView):
             token.blacklist()
             logger.info(f"Employee {request.user.email} logged out successfully.")
             return Response(
-                {"message": "Logged out successfully."}, 
-                status=status.HTTP_205_RESET_CONTENT)
+                {"message": "Logged out successfully."},
+                status=status.HTTP_205_RESET_CONTENT,
+            )
         except Exception as e:
-            logger.error(f"Error during logout for employee {request.user.email}: {str(e)}")
+            logger.error(
+                f"Error during logout for employee {request.user.email}: {str(e)}"
+            )
 
             return Response(
-                {"error": "Invalid refresh token."}, 
-                status=status.HTTP_400_BAD_REQUEST)
+                {"error": "Invalid refresh token."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
 
 class MeView(APIView):
-    """Endpoint to get the current authenticated employee's profile 
+    """Endpoint to get the current authenticated employee's profile
     information."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         serializer = EmployeeSerializer(request.user)
         return Response(serializer.data)
 
-#=============================
+
+# =============================
 # INSTITUTION VIEWS
-#=============================
+# =============================
+
 
 class InstitutionViewSet(viewsets.ModelViewSet):
+
     queryset = Institution.objects.all()
     serializer_class = InstitutionSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
     filter_backends = [filters.SearchFilter]
-    search_fields = ["name", "location"]
+    search_fields = ["name"]
+
+    # check first if the institution exists then return that institution exists
+    def create(self, request, *args, **kwargs):
+        name = request.data.get("name")
+        if Institution.objects.filter(name=name).exists():
+            return Response(
+                {"error": "Institution with this name already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().create(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         """Override destroy to prevent deleting institutions with active employees."""
         institution = self.get_object()
         if institution.employees.filter(is_active=True).exists():
             return Response(
-                {"error": "Cannot delete institution with active employees."}, 
-                status=status.HTTP_400_BAD_REQUEST)
+                {"error": "Cannot delete institution with active employees."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return super().destroy(request, *args, **kwargs)
-    
-    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, IsAdminOrHR])
+
+    @action(
+        detail=True, methods=["get"], permission_classes=[IsAuthenticated, IsAdminOrHR]
+    )
     def employees(self, request, pk=None):
         """Get all active employees for this institution."""
         institution = self.get_object()
@@ -184,13 +221,15 @@ class InstitutionViewSet(viewsets.ModelViewSet):
         serializer = EmployeeSerializer(employees, many=True)
         return Response(serializer.data)
 
-    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, IsAdminOrHR])
+    @action(
+        detail=True, methods=["get"], permission_classes=[IsAuthenticated, IsAdminOrHR]
+    )
     def employee_count(self, request, pk=None):
         """Get count of active employees for this institution."""
         institution = self.get_object()
         count = institution.employees.filter(is_active=True).count()
         return Response({"employee_count": count})
-    
+
     @action(detail=True, methods=["patch"])
     def toggle_active(self, request, pk=None):
         institution = self.get_object()
@@ -198,19 +237,30 @@ class InstitutionViewSet(viewsets.ModelViewSet):
         institution.save()
 
         return Response(
-            {"message": f"Institution {'activated' if institution.is_active else 'deactivated'} successfully."}, 
-            status=status.HTTP_200_OK
+            {
+                "message": f"Institution {'activated' if institution.is_active else 'deactivated'} successfully."
+            },
+            status=status.HTTP_200_OK,
         )
 
-#=============================
+
+# =============================
 # EMPLOYEE VIEWS
-#=============================
+# =============================
+
 
 class EmployeeViewSet(viewsets.ModelViewSet):
-    queryset = Employee.objects.select_related('institution').all()
+    queryset = Employee.objects.select_related("institution").all()
     permission_classes = [IsAuthenticated, IsAdminOrHROfSameInstitutionAndDepartment]
     filter_backends = [filters.SearchFilter]
-    search_fields = ["email", "first_name", "last_name", "department", "position", "role"]
+    search_fields = [
+        "email",
+        "first_name",
+        "last_name",
+        "department",
+        "position",
+        "role",
+    ]
 
     def get_queryset(self):
         """
@@ -218,35 +268,33 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         Admins/HR/Managers can only see employees from their own institution and department.
         """
         user = self.request.user
-        
+
         if user.role in [Employee.Role.ADMIN, Employee.Role.HR, Employee.Role.MANAGER]:
             # Only show employees from the same institution and department
-            return Employee.objects.select_related('institution').filter(
-                institution=user.institution,
-                department=user.department
+            return Employee.objects.select_related("institution").filter(
+                institution=user.institution, department=user.department
             )
-        
-        return Employee.objects.select_related('institution').none()
+
+        return Employee.objects.select_related("institution").none()
 
     def get_serializer_class(self):
-        """ Use different serializers for create/update vs list/retrieve to handle password setting and read-only fields appropriately.
-        """
+        """Use different serializers for create/update vs list/retrieve to handle password setting and read-only fields appropriately."""
         if self.action == "create":
             return EmployeeCreateSerializer
         elif self.action in ["update", "partial_update"]:
             return EmployeeUpdateSerializer
         return EmployeeSerializer
-    
+
     def destroy(self, request, *args, **kwargs):
         """Override destroy to perform a soft delete by setting is_active to False."""
         employee = self.get_object()
         employee.is_active = False
         employee.save()
         return Response(
-            {"message": "Employee deactivated successfully."}, 
-            status=status.HTTP_204_NO_CONTENT
+            {"message": "Employee deactivated successfully."},
+            status=status.HTTP_204_NO_CONTENT,
         )
-    
+
     @action(detail=True, methods=["get"])
     def leaves(self, request, pk=None):
         """Get all leave requests for this employee."""
@@ -254,7 +302,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         leaves = employee.leaves.all()
         serializer = LeaveSerializer(leaves, many=True)
         return Response(serializer.data)
-    
+
     @action(detail=True, methods=["patch"])
     def toggle_active(self, request, pk=None):
         employee = self.get_object()
@@ -262,30 +310,33 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         employee.save()
 
         return Response(
-            {"message": f"Employee {'activated' if employee.is_active else 'deactivated'} successfully."}, 
-            status=status.HTTP_200_OK
+            {
+                "message": f"Employee {'activated' if employee.is_active else 'deactivated'} successfully."
+            },
+            status=status.HTTP_200_OK,
         )
-    
+
     @action(detail=True, methods=["post"])
     def resend_welcome_email(self, request, pk=None):
         """Resend welcome email with password reset link to the employee."""
         employee = self.get_object()
         if not employee.is_active:
             return Response(
-                {"error": "Cannot send email to an inactive employee."}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Cannot send email to an inactive employee."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         send_welcome_email(employee)
         logger.info(f"Resent welcome email to employee: {employee.email}.")
 
         return Response(
-            {"message": "Welcome email resent successfully."}, 
-            status=status.HTTP_200_OK
+            {"message": "Welcome email resent successfully."}, status=status.HTTP_200_OK
         )
 
-#=============================
+
+# =============================
 # LEAVE TYPE VIEWS
-#=============================
+# =============================
+
 
 class LeaveTypeViewSet(viewsets.ModelViewSet):
     queryset = LeaveType.objects.all()
@@ -296,19 +347,29 @@ class LeaveTypeViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         """Only allow HR and Admin to create/update/delete leave types, but allow all authenticated users to view them."""
-        if self.action in ["list", "retrieve", "create", "update", "partial_update", "destroy"]:
+        if self.action in [
+            "list",
+            "retrieve",
+            "create",
+            "update",
+            "partial_update",
+            "destroy",
+        ]:
             return [IsAuthenticated(), IsAdminOrHR()]
         return [IsAuthenticated()]
-    
+
     def destroy(self, request, *args, **kwargs):
         """Override destroy to prevent deleting leave types that are associated with existing leave requests."""
         leave_type = self.get_object()
         if leave_type.leaves.exists():
             return Response(
-                {"error": "Cannot delete leave type that is associated with existing leave requests."}, 
-                status=status.HTTP_400_BAD_REQUEST)
+                {
+                    "error": "Cannot delete leave type that is associated with existing leave requests."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return super().destroy(request, *args, **kwargs)
-    
+
     @action(detail=True, methods=["patch"])
     def toggle_active(self, request, pk=None):
         leave_type = self.get_object()
@@ -316,19 +377,29 @@ class LeaveTypeViewSet(viewsets.ModelViewSet):
         leave_type.save()
 
         return Response(
-            {"message": f"Leave type {'activated' if leave_type.is_active else 'deactivated'} successfully."}, 
-            status=status.HTTP_200_OK
+            {
+                "message": f"Leave type {'activated' if leave_type.is_active else 'deactivated'} successfully."
+            },
+            status=status.HTTP_200_OK,
         )
-    
-#=============================
+
+
+# =============================
 # LEAVE VIEWS
-#=============================
+# =============================
+
 
 class LeaveViewSet(viewsets.ModelViewSet):
     serializer_class = LeaveSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ["leave_type__name", "status", "employee__email", "employee__first_name", "employee__last_name"]
+    search_fields = [
+        "leave_type__name",
+        "status",
+        "employee__email",
+        "employee__first_name",
+        "employee__last_name",
+    ]
 
     def get_queryset(self):
         """
@@ -342,16 +413,18 @@ class LeaveViewSet(viewsets.ModelViewSet):
             # Only show leaves from employees in the same institution and department as the admin/HR/manager
             return Leave.objects.select_related("employee", "leave_type").filter(
                 employee__institution=user.institution,
-                employee__department=user.department
+                employee__department=user.department,
             )
-        
-        return Leave.objects.select_related("employee", "leave_type").filter(employee=user)
-    
+
+        return Leave.objects.select_related("employee", "leave_type").filter(
+            employee=user
+        )
+
     def perform_create(self, serializer):
-        """ Create leave for an employee"""
+        """Create leave for an employee"""
 
         serializer.save(employee=self.request.user)
-    
+
     def destroy(self, request, *args, **kwargs):
         """Override destroy to perform a soft delete by setting status to 'Cancelled'."""
         leave = self.get_object()
@@ -359,27 +432,35 @@ class LeaveViewSet(viewsets.ModelViewSet):
             leave.status = Leave.Status.CANCELLED
             leave.save()
             return Response(
-                {"message": "Leave request cancelled successfully."}, 
-                status=status.HTTP_204_NO_CONTENT
+                {"message": "Leave request cancelled successfully."},
+                status=status.HTTP_204_NO_CONTENT,
             )
         return Response(
-            {"error": "Only pending or approved leave requests can be cancelled."}, 
-            status=status.HTTP_400_BAD_REQUEST
+            {"error": "Only pending or approved leave requests can be cancelled."},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-    
-    @action(detail=True, methods=["patch"], permission_classes=[IsAuthenticated, IsAdminOrHROfSameInstitutionAndDepartment])
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        permission_classes=[IsAuthenticated, IsAdminOrHROfSameInstitutionAndDepartment],
+    )
     def update_status(self, request, pk=None):
         """Custom action to update the status of a leave request by HR or Admin from the same institution and department."""
         leave = self.get_object()
-        
+
         # Check if the requester is from the same institution and department
-        if (leave.employee.institution != request.user.institution or 
-            leave.employee.department != request.user.department):
+        if (
+            leave.employee.institution != request.user.institution
+            or leave.employee.department != request.user.department
+        ):
             return Response(
-                {"error": "You can only update leaves for employees in your institution and department."}, 
-                status=status.HTTP_403_FORBIDDEN
+                {
+                    "error": "You can only update leaves for employees in your institution and department."
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
-        
+
         serializer = LeaveStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -388,8 +469,10 @@ class LeaveViewSet(viewsets.ModelViewSet):
 
         if leave.status in [Leave.Status.CANCELLED, Leave.Status.REJECTED]:
             return Response(
-                {"error": "Cannot update status of a cancelled or rejected leave request."}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "error": "Cannot update status of a cancelled or rejected leave request."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         leave.status = new_status
@@ -398,42 +481,46 @@ class LeaveViewSet(viewsets.ModelViewSet):
         leave.save()
 
         return Response(
-            {"message": f"Leave request status updated to {new_status} successfully."}, 
-            status=status.HTTP_200_OK
+            {"message": f"Leave request status updated to {new_status} successfully."},
+            status=status.HTTP_200_OK,
         )
-    
+
     @action(detail=True, methods=["patch"])
     def cancel(self, request, pk=None):
-        """ Action to allow employees to edit their leave request if it's still pending"""
+        """Action to allow employees to edit their leave request if it's still pending"""
         leave = self.get_object()
 
         if leave.employee != request.user:
             return Response(
-                {"error": "You can only cancel your own leave requests."}, 
-                status=status.HTTP_403_FORBIDDEN
+                {"error": "You can only cancel your own leave requests."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         if leave.status != Leave.Status.PENDING:
             return Response(
-                {"error": "Only pending leave requests can be cancelled."}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Only pending leave requests can be cancelled."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         leave.status = Leave.Status.CANCELLED
         leave.save()
 
         return Response(
-            {"message": "Leave request cancelled successfully."}, 
-            status=status.HTTP_200_OK
+            {"message": "Leave request cancelled successfully."},
+            status=status.HTTP_200_OK,
         )
-    
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated, IsAdminOrHR])
+
+    @action(
+        detail=False, methods=["get"], permission_classes=[IsAuthenticated, IsAdminOrHR]
+    )
     def pending_leaves(self, request):
         """Get all pending leave requests for HR and Admin."""
-        pending_leaves = Leave.objects.select_related("employee", "leave_type").filter(status=Leave.Status.PENDING)
+        pending_leaves = Leave.objects.select_related("employee", "leave_type").filter(
+            status=Leave.Status.PENDING
+        )
         serializer = LeaveSerializer(pending_leaves, many=True)
-        return Response(serializer.data)    
-    
+        return Response(serializer.data)
+
     @action(detail=False, methods=["get"])
     def by_employee(self, request):
         """
@@ -443,15 +530,11 @@ class LeaveViewSet(viewsets.ModelViewSet):
         employee_id = request.query_params.get("employee_id")
         if not employee_id:
             return Response(
-                {"error": "Employee ID is required."}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Employee ID is required."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        employee_leaves = Leave.objects.select_related("leave_type").filter(employee=request.user)
+        employee_leaves = Leave.objects.select_related("leave_type").filter(
+            employee=request.user
+        )
         serializer = LeaveSerializer(employee_leaves, many=True)
         return Response(serializer.data)
-
-
-
-
-    
-

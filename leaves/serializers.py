@@ -13,13 +13,10 @@ logger = logging.getLogger(__name__)
 
 # Serializer for Institution model
 class InstitutionSerializer(serializers.ModelSerializer):
-    employee_count = serializers.SerializerMethodField()
     class Meta:
         model = Institution
-        fields = ["id", "name", "location", "created_at", "is_active", "employee_count"]
-    
-    def get_employee_count(self, obj):
-        return obj.employees.filter(is_active=True).count()
+        fields = ["id", "name"]
+
 
 # Serializer for Employee model
 class EmployeeSerializer(serializers.ModelSerializer):
@@ -45,10 +42,10 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     def get_institution_name(self, obj):
         return obj.institution.name if obj.institution else None
-    
+
     def get_leave_count(self, obj):
         return obj.leaves.count()
-        
+
     def update(self, instance, validated_data):
         password = validated_data.pop("password", None)
 
@@ -58,7 +55,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
-    
+
 
 class EmployeeCreateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -80,7 +77,7 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop("password", None)
-        employee = Employee(**validated_data) 
+        employee = Employee(**validated_data)
         employee.set_unusable_password()
         employee.must_reset_password = True
         employee.save()
@@ -107,32 +104,39 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
             "is_active",
         ]
 
+
 class SetPasswordSerializer(serializers.Serializer):
     """Serializer for allowing users to set a new password after receiving a reset link."""
+
     uid = serializers.CharField()
     token = serializers.CharField()
-    new_password = serializers.CharField(min_length=8,write_only=True, required=True)
-    confirm_password = serializers.CharField(min_length=8, write_only=True, required=True)
-    
+    new_password = serializers.CharField(min_length=8, write_only=True, required=True)
+    confirm_password = serializers.CharField(
+        min_length=8, write_only=True, required=True
+    )
 
     def validate_password(self, value):
-        if value['new_password'] != value['confirm_password']:
+        if value["new_password"] != value["confirm_password"]:
             raise serializers.ValidationError("Passwords do not match.")
-        if len(value['new_password']) < 8:
-            raise serializers.ValidationError("Password must be at least 8 characters long.")
+        if len(value["new_password"]) < 8:
+            raise serializers.ValidationError(
+                "Password must be at least 8 characters long."
+            )
 
         try:
-            uid = force_str(urlsafe_base64_decode(value['uid']))
+            uid = force_str(urlsafe_base64_decode(value["uid"]))
             employee = Employee.objects.get(pk=uid)
-        except(Employee.DoesNotExist, ValueError, TypeError, OverflowError):
+        except (Employee.DoesNotExist, ValueError, TypeError, OverflowError):
             raise serializers.ValidationError({"uid": "Invalid user."})
-        
-        if not default_token_generator.check_token(employee, value['token']):
-            raise serializers.ValidationError({"token": "Reset link is invalid or has expired."})
-        
-        value['employee'] = employee
+
+        if not default_token_generator.check_token(employee, value["token"]):
+            raise serializers.ValidationError(
+                {"token": "Reset link is invalid or has expired."}
+            )
+
+        value["employee"] = employee
         return value
-    
+
     def save(self):
         employee = self.validated_data["employee"]
         employee.set_password(self.validated_data["new_password"])
@@ -148,16 +152,22 @@ class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
+
 class LeaveTypeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = LeaveType
         fields = ["id", "name", "max_days", "is_active"]
 
+
 class LeaveSerializer(serializers.ModelSerializer):
-    employee_name = serializers.CharField(source="employee.get_full_name", read_only=True)
+    employee_name = serializers.CharField(
+        source="employee.get_full_name", read_only=True
+    )
     leave_type_name = serializers.CharField(source="leave_type.name", read_only=True)
-    institution_name = serializers.CharField(source="employee.institution.name", read_only=True)
+    institution_name = serializers.CharField(
+        source="employee.institution.name", read_only=True
+    )
     leave_duration = serializers.SerializerMethodField()
 
     class Meta:
@@ -178,7 +188,7 @@ class LeaveSerializer(serializers.ModelSerializer):
 
     def get_leave_duration(self, obj):
         return calculate_working_days(obj.start_date, obj.end_date)
-    
+
     def get_employee_name(self, obj):
         full_name = obj.employee.first_name + " " + obj.employee.last_name
 
@@ -188,38 +198,41 @@ class LeaveSerializer(serializers.ModelSerializer):
         return obj.leave_type.name if obj.leave_type else None
 
     def validate(self, data):
-        start_date = data.get('start_date')
-        end_date = data.get('end_date')
-        leave_type = data.get('leave_type')
-        document = data.get('document')
+        start_date = data.get("start_date")
+        end_date = data.get("end_date")
+        leave_type = data.get("leave_type")
+        document = data.get("document")
 
         if start_date and end_date:
             if end_date < start_date:
-                raise serializers.ValidationError({
-                    "end_date": "end_date cannot be before start_date."
-                })
+                raise serializers.ValidationError(
+                    {"end_date": "end_date cannot be before start_date."}
+                )
 
         if leave_type and not leave_type.is_active:
-            raise serializers.ValidationError({
-                "leave_type": f"'{leave_type.name}' is currently inactive."
-            })
+            raise serializers.ValidationError(
+                {"leave_type": f"'{leave_type.name}' is currently inactive."}
+            )
 
         if leave_type and leave_type.requires_document and not document:
-            raise serializers.ValidationError({
-                "document": f"A document is required for '{leave_type.name}'."
-            })
+            raise serializers.ValidationError(
+                {"document": f"A document is required for '{leave_type.name}'."}
+            )
 
         if start_date and end_date and leave_type:
             duration = (end_date - start_date).days + 1
             if duration > leave_type.max_days:
-                raise serializers.ValidationError({
-                    "end_date": (
-                        f"Duration of {duration} days exceeds the maximum "
-                        f"of {leave_type.max_days} days for '{leave_type.name}'."
-                    )
-                })
+                raise serializers.ValidationError(
+                    {
+                        "end_date": (
+                            f"Duration of {duration} days exceeds the maximum "
+                            f"of {leave_type.max_days} days for '{leave_type.name}'."
+                        )
+                    }
+                )
 
         return data
+
 
 class LeaveStatusUpdateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -229,4 +242,4 @@ class LeaveStatusUpdateSerializer(serializers.ModelSerializer):
     def validate_status(self, value):
         if value not in Leave.Status.values:
             raise serializers.ValidationError("Invalid status value.")
-        return value 
+        return value

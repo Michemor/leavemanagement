@@ -19,8 +19,7 @@ class Command(BaseCommand):
             # Get or create a default institution for admin
             from leaves.models import Institution
             default_institution, _ = Institution.objects.get_or_create(
-                name="System",
-                defaults={"location": "System"}
+                name="System"
             )
             
             User.objects.create_superuser(
@@ -30,7 +29,7 @@ class Command(BaseCommand):
                 last_name='User',
                 department='Administration',
                 position='System Administrator',
-                role='HR',
+                role='ADMIN',
                 institution=default_institution
             )
             self.stdout.write(self.style.SUCCESS(f"Successfully created admin: {email}"))

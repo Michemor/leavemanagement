@@ -321,9 +321,7 @@ This document provides a comprehensive guide to all available API endpoints in t
 
   ```json
   {
-    "name": "string",
-    "location": "string",
-    "contact_email": "string (optional)"
+    "name": "string"
   }
   ```
 
