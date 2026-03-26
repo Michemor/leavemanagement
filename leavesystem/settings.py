@@ -66,7 +66,14 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "leavesystem.urls"
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS Configuration
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",  # React development server
+    "http://localhost:5174",  # React development server
+    "http://localhost:5175",  # React development server
+    "https://lms-frontend-nine-gules.vercel.app", # Deployed frontend URL
+]
+CORS_ALLOW_ALL_ORIGINS = False
 
 
 TEMPLATES = [
@@ -173,18 +180,17 @@ AUTH_USER_MODEL = "leaves.Employee"
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 
-
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
         },
     },
-    'root': {
-        'handlers': ['console'],
-        'level': 'DEBUG',
+    "root": {
+        "handlers": ["console"],
+        "level": "DEBUG",
     },
 }
 
