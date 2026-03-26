@@ -7,6 +7,7 @@ from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 
 
+
 def calculate_working_days(start_date, end_date):
     """Calculate the number of working days between two dates."""
     working_days = 0
@@ -26,24 +27,22 @@ def generate_password_reset_link(employee):
     """Generate a password reset link for the given user."""
     token = default_token_generator.make_token(employee)
     uid = urlsafe_base64_encode(force_bytes(employee.pk))
-    reset_link = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}/"
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+    reset_link = f"{frontend_url}/reset-password/{uid}/{token}/"
     return reset_link
 
 def send_welcome_email(employee):
     """Send a welcome email to the new employee with instructions to set their password."""
-    reset_link = generate_password_reset_link(employee)
-    subject = "Welcome to the Leave Management System"
-    message = f"""" \
+    subject = "Welcome to the Leave Management System!"
+    message = f"""\
         Hi {employee.first_name},
         
-        \n\nWelcome to the Team Impact University! 
-        Your account has been created on the Leave Management System. 
+        \n\nWelcome to the Leave Management System! Your account has been created successfully.
         
-        Please set your password using the following link to activate your account:
-        \n\n{reset_link}\n\n
+        Please click the following link to set your password and access your account:
+        \n\n{generate_password_reset_link(employee)}\n\n
 
-        The link will expire in 24 hours, so please set your password as soon as possible. 
-        If you did not expect this email, please contact your administrator immediately.
+        If you have any questions or need assistance, please contact your administrator.
 
         
         Best regards,

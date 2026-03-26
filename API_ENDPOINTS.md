@@ -139,12 +139,43 @@ This document provides a comprehensive guide to all available API endpoints in t
 - **Permissions:** HR, Admin roles
 - **Returns:** All leaves with pending status
 
-### Get Current User's Leaves
+### Get Leaves by Employee
 
 **Endpoint:** `GET /leaves/by_employee/`
 
 - **Permissions:** Authenticated users
-- **Returns:** All leaves belonging to current user
+- **Query Parameters:**
+  - `employee_id` (optional): UUID of the employee to filter by (HR/Admin/Manager only)
+- **Behavior:**
+  - **Employees:** Always see their own leaves (parameter ignored if provided)
+  - **HR/Admin/Manager:** 
+    - Without `employee_id`: See all leaves from employees in their institution and department
+    - With `employee_id`: See leaves from that specific employee if they're in the same institution/department
+- **Returns (200 OK):** Array of leave requests
+- **Error Responses:**
+  - `400 Bad Request`: Invalid employee_id format
+  - `403 Forbidden`: Trying to access an employee outside your institution/department (HR/Admin only)
+  - `404 Not Found`: Employee with given ID doesn't exist
+
+**Examples:**
+
+1. **Employee viewing their own leaves:**
+   ```
+   GET /leaves/by_employee/
+   ```
+   Returns all leaves of the authenticated employee.
+
+2. **HR/Admin viewing all department leaves:**
+   ```
+   GET /leaves/by_employee/
+   ```
+   Returns all leaves from employees in HR/Admin's institution and department.
+
+3. **HR/Admin viewing specific employee's leaves:**
+   ```
+   GET /leaves/by_employee/?employee_id=550e8400-e29b-41d4-a716-446655440000
+   ```
+   Returns all leaves from that specific employee (if in same department).
 
 ---
 

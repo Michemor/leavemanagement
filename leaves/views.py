@@ -264,17 +264,21 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        Filter employees based on the requester's institution and department.
-        Admins/HR/Managers can only see employees from their own institution and department.
+        Filter employees based on the requester's institution.
+        - Admins/HR/Managers: See all employees in their institution
+        - Staff: See no employees (they don't have permission to list anyway)
         """
         user = self.request.user
 
-        if user.role in [Employee.Role.ADMIN, Employee.Role.HR, Employee.Role.MANAGER]:
-            # Only show employees from the same institution and department
+        if user.role in [Employee.Role.HR, Employee.Role.MANAGER]:
+            # Show all employees from the same institution (across all departments)
             return Employee.objects.select_related("institution").filter(
-                institution=user.institution, department=user.department
-            )
-
+                institution=user.institution)
+        elif user.role == Employee.Role.ADMIN:
+            # Show all employees
+            return Employee.objects.all()
+        # Staff users can't list employees (permission denied by IsAdminOrHROfSameInstitutionAndDepartment)
+        
         return Employee.objects.select_related("institution").none()
 
     def get_serializer_class(self):
@@ -284,6 +288,18 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         elif self.action in ["update", "partial_update"]:
             return EmployeeUpdateSerializer
         return EmployeeSerializer
+
+    def create(self, request, *args, **kwargs):
+        """Override create to send welcome email after employee creation."""
+        response = super().create(request, *args, **kwargs)
+
+        if response.status_code == status.HTTP_201_CREATED:
+            # Get the created employee and send welcome email
+            employee = Employee.objects.get(id=response.data["id"])
+            send_welcome_email(employee)
+            logger.info(f"Welcome email sent to new employee: {employee.email}")
+
+        return response
 
     def destroy(self, request, *args, **kwargs):
         """Override destroy to perform a soft delete by setting is_active to False."""
@@ -521,20 +537,106 @@ class LeaveViewSet(viewsets.ModelViewSet):
         serializer = LeaveSerializer(pending_leaves, many=True)
         return Response(serializer.data)
 
-    @action(detail=False, methods=["get"])
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def by_employee(self, request):
         """
-        Filter leave requests by the currently authenticated employee.
-        Employees can only see their own leave requests.
+        Get leave requests filtered by employee.
+
+        - Employees: Always see their own leaves (employee_id parameter ignored)
+        - HR/Admin/Managers: See leaves in their institution/department, optionally filtered by employee_id
+
+        Query Parameters:
+            employee_id (optional): UUID of the employee to filter by. Only HR/Admin/Managers can use this.
+                                  Must be an employee from their own institution and department.
+
+        Returns:
+            - 200 OK: List of Leave objects
+            - 400 Bad Request: Invalid employee_id format
+            - 404 Not Found: Employee not found
+            - 403 Forbidden: Employee is outside requester's institution/department (HR/Admin only)
         """
+        user = request.user
         employee_id = request.query_params.get("employee_id")
-        if not employee_id:
-            return Response(
-                {"error": "Employee ID is required."},
-                status=status.HTTP_400_BAD_REQUEST,
+
+        # For regular employees, always return their own leaves
+        if user.role not in [
+            Employee.Role.HR,
+            Employee.Role.ADMIN,
+            Employee.Role.MANAGER,
+        ]:
+            employee_leaves = Leave.objects.select_related(
+                "leave_type", "employee"
+            ).filter(employee=user)
+            serializer = LeaveSerializer(employee_leaves, many=True)
+            return Response(serializer.data)
+
+        # For HR/Admin/Managers
+        if employee_id:
+            # Validate that the employee exists
+            try:
+                target_employee = Employee.objects.get(id=employee_id)
+            except Employee.DoesNotExist:
+                return Response(
+                    {"error": f"Employee with ID '{employee_id}' not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Check if target employee is in the same institution and department
+            if (
+                target_employee.institution != user.institution
+                or target_employee.department != user.department
+            ):
+                return Response(
+                    {
+                        "error": "You can only view leaves for employees in your institution and department."
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            # Return leaves for the specific employee
+            employee_leaves = Leave.objects.select_related(
+                "leave_type", "employee"
+            ).filter(employee=target_employee)
+        else:
+            # Return all leaves from employees in the same institution and department
+            employee_leaves = Leave.objects.select_related(
+                "leave_type", "employee"
+            ).filter(
+                employee__institution=user.institution,
+                employee__department=user.department,
             )
-        employee_leaves = Leave.objects.select_related("leave_type").filter(
-            employee=request.user
-        )
+
         serializer = LeaveSerializer(employee_leaves, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    def statistics(self, request):
+        """
+        Get statistics about leave requests.
+        - Employees see their own statistics
+        - HR/Admin/Managers see statistics for their institution and department
+        """
+        user = self.request.user
+        queryset = self.get_queryset()
+
+        total_leaves = queryset.count()
+        approved_leaves = queryset.filter(status=Leave.Status.APPROVED).count()
+        rejected_leaves = queryset.filter(status=Leave.Status.REJECTED).count()
+        pending_leaves = queryset.filter(status=Leave.Status.PENDING).count()
+        cancelled_leaves = queryset.filter(status=Leave.Status.CANCELLED).count()
+
+        statistics = {
+            "total_leaves": total_leaves,
+            "approved_leaves": approved_leaves,
+            "rejected_leaves": rejected_leaves,
+            "pending_leaves": pending_leaves,
+            "cancelled_leaves": cancelled_leaves,
+            "status_breakdown": {
+                "APPROVED": approved_leaves,
+                "REJECTED": rejected_leaves,
+                "PENDING": pending_leaves,
+                "CANCELLED": cancelled_leaves,
+            },
+        }
+
+        return Response({"statistics": statistics}, status=status.HTTP_200_OK)

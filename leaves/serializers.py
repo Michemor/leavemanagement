@@ -7,6 +7,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_decode
 from django.utils.encoding import force_str
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +48,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
         return obj.leaves.count()
 
     def update(self, instance, validated_data):
-        password = validated_data.pop("password", None)
-
+        """Update employee fields (password is handled via separate SetPassword endpoint)."""
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-        if password:
-            instance.set_password(password)
         instance.save()
         return instance
 
@@ -71,19 +69,28 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
             "institution",
             "phone_number",
         ]
-        extra_kwargs = {
-            "password": {"write_only": True},
-        }
+
+    def validate_email(self, value):
+        if Employee.objects.filter(email=value).exists():
+            raise serializers.ValidationError(
+                "An employee with this email already exists."
+            )
+        return value
 
     def create(self, validated_data):
-        password = validated_data.pop("password", None)
-        employee = Employee(**validated_data)
-        employee.set_unusable_password()
+        """Create employee with a generated password and set must_reset_password flag."""
+        # Generate a random secure password (12 characters)
+        password = get_random_string(
+            length=12,
+            allowed_chars="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()",
+        )
+
+        # Create the employee with the generated password
+        employee = Employee.objects.create_user(**validated_data, password=password)
+
+        # Set must_reset_password flag after creation
         employee.must_reset_password = True
         employee.save()
-
-        send_welcome_email(employee)
-        logger.info(f"Created new employee: {employee.email} and sent welcome email.")
 
         return employee
 
