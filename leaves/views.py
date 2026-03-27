@@ -393,7 +393,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
-    @action(detail=True, methods=["post"], url_path="resend-welcome-email")
+    @action(detail=True, methods=["post"], url_path="resend_welcome_email")
     def resend_email(self, request, pk=None):
         """Resend welcome email with password reset link to the employee."""
         employee = self.get_object()
