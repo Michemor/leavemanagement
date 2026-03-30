@@ -486,43 +486,71 @@ class LeaveViewSet(viewsets.ModelViewSet):
         return Response(
             {"message": "Leave request cancelled."}, status=status.HTTP_200_OK
         )
-
+    
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
     def update_status(self, request, pk=None):
         """Approve or reject a leave request. ADMIN / HR / MANAGER only."""
-        leave = self.get_object()
+        try:
+            leave = self.get_object()
 
-        if leave.status in [Leave.Status.CANCELLED, Leave.Status.REJECTED]:
-            return Response(
-                {"error": "Cannot update a cancelled or rejected leave request."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            if leave.status == Leave.Status.REJECTED:
+                return Response(
+                    {"error": "Cannot update a cancelled or rejected leave request."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        serializer = LeaveStatusUpdateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+            serializer = LeaveStatusUpdateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
 
-        new_status = serializer.validated_data["status"]
-        admin_remarks = serializer.validated_data.get("admin_remarks", "")
+            new_status = serializer.validated_data["status"]
+            admin_remarks = serializer.validated_data.get("admin_remarks", "")
 
-        leave.status = new_status
-        if admin_remarks:
-            leave.admin_remarks = admin_remarks
-        leave.save(update_fields=["status", "admin_remarks"])
+            leave.status = new_status
+            if admin_remarks:
+                leave.admin_remarks = admin_remarks
+            leave.save(update_fields=["status", "admin_remarks"])
 
-        # Update the leave balance when a leave is approved
-        if new_status == Leave.Status.APPROVED:
-            _update_leave_balance(leave)
+            # Update the leave balance when a leave is approved
+            if new_status == Leave.Status.APPROVED:
+                _update_leave_balance(leave)
 
-        if new_status == Leave.Status.APPROVED:
-            email_type = "approval"
-        elif new_status == Leave.Status.REJECTED:
-            email_type = "rejection"
+            # Safely determine email_type
+            email_type = None
+            if new_status == Leave.Status.APPROVED:
+                email_type = "approval"
+            elif new_status == Leave.Status.REJECTED:
+                email_type = "rejection"
+            elif new_status == Leave.Status.CANCELLED:
+                email_type = "cancellation"
 
-        leave_request_status_email(
-            leave.employee, leave_request=leave, email_type=email_type
-        )
+            # Wrap email in its own try/except so it doesn't crash the main thread
+            if email_type:
+                try:
+                    leave_request_status_email(
+                        leave.employee, leave_request=leave, email_type=email_type
+                    )
+                except Exception as exc:
+                    logger.error(f"Email failed to send: {exc}")
 
-        return Response({"message": f"Leave status updated to {new_status}."})
+            return Response({"message": f"Leave status updated to {new_status}."})
+
+        except Exception as e:
+            # === THE DEBUG TRAP ===
+            error_trace = traceback.format_exc()
+            
+            # 1. Print a massive, unmissable block in your terminal
+            print("\n" + "="*50)
+            print("🚨 CRITICAL 500 ERROR CAUGHT IN UPDATE_STATUS 🚨")
+            print("="*50)
+            print(error_trace)
+            print("="*50 + "\n")
+            
+            # 2. Send the exact error directly back to your Vite frontend
+            return Response({
+                "message": "A server error occurred.",
+                "developer_error": str(e),
+                "traceback": error_trace
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -750,8 +778,8 @@ def _update_leave_balance(leave: Leave):
     Creates the balance row if it doesn't exist yet.
     """
     year = leave.start_date.year
-    paid = leave.paid_days
-    if paid <= 0:
+    paid = leave.paid_days or 0
+    if paid == 0:
         return
     LeaveBalance.objects.get_or_create(
         employee=leave.employee,
